@@ -1,5 +1,27 @@
 # functions/write_file.py
 import os
+#Ch3.3 block added
+from google.genai import types
+
+schema_write_file = types.FunctionDeclaration(
+    name="write_file",
+    description="Writes or overwrites a file within the working directory.",
+    parameters=types.Schema(
+        type=types.Type.OBJECT,
+        properties={
+            "file_path": types.Schema(
+                type=types.Type.STRING,
+                description="The file to write to, relative to the working directory."
+            ),
+            "content": types.Schema(
+                type=types.Type.STRING,
+                description="The text content to write into the file."
+            ),
+        },
+        required=["file_path", "content"],
+    ),
+)
+
 
 def _resolve_paths(working_directory: str, user_path: str):
     """Return (base_abs, target_abs) as absolute paths."""
