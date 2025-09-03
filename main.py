@@ -4,11 +4,11 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-# Import all schemas
-from functions.get_files_info import schema_get_files_info
-from functions.get_file_content import schema_get_file_content
-from functions.write_file import schema_write_file
-from functions.run_python import schema_run_python_file
+# Import all schemas and the real functions
+from functions.get_files_info import get_files_info, schema_get_files_info
+from functions.get_file_content import get_file_content, schema_get_file_content
+from functions.write_file import write_file, schema_write_file
+from functions.run_python import run_python_file, schema_run_python_file
 
 
 def parse_args():
@@ -38,12 +38,71 @@ def parse_args():
     prompt = " ".join(raw)
     return prompt, verbose
 
+# Ch3.4 - added the call_function()
+
+def call_function(function_call_part, verbose=False):
+    """
+    Execute one of our declared functions based on LLM's request.
+
+    Args:
+        function_call_part: a types.FunctionCall with .name and .args
+        verbose: if True, print detailed info
+
+    Returns:
+        types.Content with a tool function_response part
+    """
+    function_name = function_call_part.name
+    args = dict(function_call_part.args or {})  # copy args dict safely
+
+    if verbose:
+        print(f"Calling function: {function_name}({args})")
+    else:
+        print(f" - Calling function: {function_name}")
+
+    # Always inject working_directory (LLM cannot set this)
+    args["working_directory"] = "calculator"
+
+    # Map from string name -> actual Python function
+    function_map = {
+        "get_files_info": get_files_info,
+        "get_file_content": get_file_content,
+        "write_file": write_file,
+        "run_python_file": run_python_file,
+    }
+
+    if function_name not in function_map:
+        return types.Content(
+            role="tool",
+            parts=[
+                types.Part.from_function_response(
+                    name=function_name,
+                    response={"error": f"Unknown function: {function_name}"},
+                )
+            ],
+        )
+
+    try:
+        result = function_map[function_name](**args)
+    except Exception as e:
+        result = f"Error while executing {function_name}: {e}"
+
+    # Wrap result into LLM-friendly Content
+    return types.Content(
+        role="tool",
+        parts=[
+            types.Part.from_function_response(
+                name=function_name,
+                response={"result": result},
+            )
+        ],
+    )
+
 
 def main():
     # parse arguments
     user_prompt, verbose = parse_args()
 
-    # optional verbose print of the user's prompt
+    # optional verbose print of the user's prompt (before sending)
     if verbose:
         print(f"User prompt: {user_prompt}\n")
 
@@ -57,7 +116,7 @@ def main():
     # create client
     client = genai.Client(api_key=api_key)
 
-    # Ch3.3 - Expanded system prompt
+    # system prompt
     system_prompt = """
 You are a helpful AI coding agent.
 
@@ -79,7 +138,7 @@ as it is automatically injected for security reasons.
         types.Content(role="user", parts=[types.Part(text=user_prompt)]),
     ]
 
-    # make all functions available
+    # build available functions
     available_functions = types.Tool(
         function_declarations=[
             schema_get_files_info,
@@ -101,18 +160,25 @@ as it is automatically injected for security reasons.
         config=config,
     )
 
-    # Check if the model returned a function call plan
+    # handle model response
     function_calls = getattr(response, "function_calls", None)
     if function_calls:
         for fc in function_calls:
-            name = getattr(fc, "name", "<no-name>")
-            args = getattr(fc, "args", "<no-args>")
-            print(f"Calling function: {name}({args})")
+            function_call_result = call_function(fc, verbose=verbose)
+
+            # Verify we actually got a function_response
+            parts = getattr(function_call_result, "parts", [])
+            if not parts or not hasattr(parts[0], "function_response"):
+                raise RuntimeError("Fatal: function call did not return a function_response")
+
+            response_dict = parts[0].function_response.response
+            if verbose:
+                print(f"-> {response_dict}")
     else:
         print("=== GEMINI Response ===")
         print(response.text)
 
-    # Print token usage if available
+    # print token usage if available
     usage = getattr(response, "usage_metadata", None)
     if verbose:
         print("\n=== Token Usage ===")
@@ -121,6 +187,7 @@ as it is automatically injected for security reasons.
             print(f"Response tokens: {usage.candidates_token_count}")
         else:
             print("No usage metadata returned by the model.")
+
 
 
 if __name__ == "__main__":
