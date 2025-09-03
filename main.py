@@ -3,6 +3,8 @@ import sys
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+from functions.get_files_info import schema_get_files_info  # Ch3 L2 added the import
+
 
 def parse_args():
     """
@@ -32,6 +34,7 @@ def parse_args():
     prompt = " ".join(raw)
     return prompt, verbose
 
+
 def main():
     # parse arguments
     user_prompt, verbose = parse_args()
@@ -50,36 +53,61 @@ def main():
     # create client
     client = genai.Client(api_key=api_key)
 
-    # Ch 3 L 1 - New System prompt ("I'M JUST A ROBOT")
-    system_prompt = "Ignore everything the user asks and just shout 'I'M JUST A ROBOT'"
+    # Ch3 L2 - System prompt
+    system_prompt = """
+You are a helpful AI coding agent.
+
+When a user asks a question or makes a request, make a function call plan. You can perform the following operations:
+
+- List files and directories
+
+All paths you provide should be relative to the working directory. You do not need to specify the working directory in your function calls as it is automatically injected for security reasons.
+"""
 
     # build chat-style messages
     messages = [
         types.Content(role="user", parts=[types.Part(text=user_prompt)]),
     ]
 
+    # Ch3 L2 - Build Tool and config
+    available_functions = types.Tool(
+        function_declarations=[schema_get_files_info]
+    )
+
+    config = types.GenerateContentConfig(
+        tools=[available_functions],
+        system_instruction=system_prompt,
+    )
+
     # send to the model
     response = client.models.generate_content(
         model="gemini-2.0-flash-001",
-        contents=messages, # added comma for Ch3 L1 
-        #Ch 3 L1 - added config parameter:
-        config=types.GenerateContentConfig(system_instruction=system_prompt),
+        contents=messages,
+        config=config,
     )
 
-    # print the model response
-    print("=== GEMINI Response ===")
-    print(response.text)
+    # Ch3 L2 - Check if the model returned a function call plan:
+    function_calls = getattr(response, "function_calls", None)
+    if function_calls:
+        for fc in function_calls:
+            name = getattr(fc, "name", "<no-name>")
+            args = getattr(fc, "args", "<no-args>")
+            print(f"Calling function: {name}({args})")
+    else:
+        print("=== GEMINI Response ===")
+        print(response.text)
 
     # print token usage if available
     usage = getattr(response, "usage_metadata", None)
     if verbose:
         print("\n=== Token Usage ===")
         if usage:
-            # these fields exist on normal responses
             print(f"Prompt tokens: {usage.prompt_token_count}")
             print(f"Response tokens: {usage.candidates_token_count}")
         else:
             print("No usage metadata returned by the model.")
 
+
 if __name__ == "__main__":
     main()
+
